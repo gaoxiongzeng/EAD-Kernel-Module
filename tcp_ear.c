@@ -10,12 +10,12 @@
 #include <linux/inet_diag.h>
 
 #define EAR_SCALE 1024U
-#define EAR_BETA_ON_INIT 205U
+#define EAR_BETA_ON_INIT 32U // scaled by EAR_SCALE
 #define EAR_C_DEFAULT 1000000U // Kbps
 #define EAR_PKT_SIZE_DEFAULT 12U // Kbits
-#define EAR_K_DEFAULT 300 // pkts
-#define EAR_RTT_THRESHOLD_HEADROOM_ON_INIT 10000
-#define EAR_RTT_THRESHOLD_FACTOR_ON_INIT 3
+#define EAR_K_DEFAULT 300U // pkts
+#define EAR_RTT_THRESHOLD_HEADROOM_ON_INIT 30000U // us
+#define EAR_RTT_THRESHOLD_FACTOR_ON_INIT 1024U // scaled by EAR_SCALE
 #define EAR_MIN_H 1U
 #define EAR_MIN_H_RTT 2000U
 #define EAR_MAX_H 16U
@@ -78,7 +78,11 @@ MODULE_PARM_DESC(ear_rtt_threshold_headroom, "parameter for initial rtt threshol
 
 static unsigned int ear_rtt_threshold_factor __read_mostly = EAR_RTT_THRESHOLD_FACTOR_ON_INIT;
 module_param(ear_rtt_threshold_factor, uint, 0644);
-MODULE_PARM_DESC(ear_rtt_threshold_factor, "parameter for initial rtt threshold factor");
+MODULE_PARM_DESC(ear_rtt_threshold_factor, "parameter for initial rtt threshold factor (scaled by 1024)");
+
+static unsigned int ear_rtt_base_update_g __read_mostly = EAR_RTT_THRESHOLD_FACTOR_ON_INIT;
+module_param(ear_rtt_base_update_g, uint, 0644);
+MODULE_PARM_DESC(ear_rtt_base_update_g, "parameter for initial rtt threshold factor (scaled by 1024)");
 
 static unsigned int ear_h_enable __read_mostly = 0;
 module_param(ear_h_enable, uint, 0644);
@@ -147,7 +151,11 @@ static u32 ear_cwnd_ecn(struct sock *sk) {
 	struct tcp_sock *tp = tcp_sk(sk);
 	if (ear_f_enable && ca->rtt_base != 0x7fffffff) {
 		u32 f = 8*ear_k*EAR_SCALE/(ear_c*ca->rtt_base/ear_pkt_size/1000000 + ear_k);
-		return max(tp->snd_cwnd - ((tp->snd_cwnd * ca->ear_alpha * f) >> 21U), 2U);
+		u32 cwnd_reduction = (tp->snd_cwnd * ca->ear_alpha * f) >> 21U;
+		if (tp->snd_cwnd > cwnd_reduction + 2)
+			return (tp->snd_cwnd - cwnd_reduction);
+		else
+			return 2;
 	}
 	else
 		return max(tp->snd_cwnd - ((tp->snd_cwnd * ca->ear_alpha) >> 11U), 2U);
@@ -277,7 +285,7 @@ static void ear_in_ack_event(struct sock *sk, u32 flags)
 
 		if (ear_rtt_enable) {
 			u32 cwnd_rtt = 0x7fffffff;
-			if (ca->rtt_count && ca->rtt_min > (ca->rtt_base*ear_rtt_threshold_factor + ear_rtt_threshold_headroom))
+			if (ca->rtt_count && ca->rtt_min > ((ca->rtt_base*ear_rtt_threshold_factor) >> 10U) + ear_rtt_threshold_headroom)
 				cwnd_rtt = ear_cwnd_rtt(sk);
 			tp->snd_cwnd = min(tp->snd_cwnd, cwnd_rtt);
 		}
