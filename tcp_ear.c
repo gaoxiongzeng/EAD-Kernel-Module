@@ -10,23 +10,25 @@
 #include <linux/inet_diag.h>
 
 #define EAR_SCALE 1024U
-#define EAR_BETA_ON_INIT 32U // scaled by EAR_SCALE
+#define EAR_BETA_ON_INIT 128U // scaled by EAR_SCALE
 #define EAR_C_DEFAULT 1000000U // Kbps
 #define EAR_PKT_SIZE_DEFAULT 12U // Kbits
 #define EAR_K_DEFAULT 300U // pkts
-#define EAR_RTT_THRESHOLD_HEADROOM_ON_INIT 30000U // us
+#define EAR_RTT_THRESHOLD_HEADROOM_ON_INIT 5000U // us
 #define EAR_RTT_THRESHOLD_FACTOR_ON_INIT 1024U // scaled by EAR_SCALE
-#define EAR_MIN_H 1U
-#define EAR_MIN_H_RTT 2000U
-#define EAR_MAX_H 16U
-#define EAR_MAX_H_RTT 32000U
+#define EAR_MIN_H_RTT 3000U
+#define EAR_H_FACTOR 120U // scaled by EAR_SCALE
+#define EAR_MIN_H 100U // scaled by EAR_SCALE
+#define EAR_MAX_H 5000U // scaled by EAR_SCALE
 
 struct ear {
 	u32 acked_bytes_ecn;
 	u32 acked_bytes_total;
-	u16	rtt_count;		/* # of RTTs measured within last RTT */
-	u32	rtt_min;		/* min of RTTs measured within last RTT (in usec) */
-	u32	rtt_base;	/* the min of all RTT measurements (in usec) */
+	u16	rtt_count;
+	u32 rtt_sum;
+	u32	rtt_min;
+	u32	rtt_ave;
+	u32	rtt_base;
 	u32 prior_snd_una;
 	u32 prior_rcv_nxt;
 	u32 ear_alpha;
@@ -34,13 +36,11 @@ struct ear {
 	u32 next_seq;
 	u32 ce_state;
 	u32 delayed_ack_reserved;
-	u32 cwr_cwnd;
 	u32 loss_cwnd;
-	u32 last_rtt_cwnd;
 	u8 prior_ca_state;
 };
 
-static unsigned int ear_shift_g __read_mostly = 4; /* g = 1/2^4 */
+static unsigned int ear_shift_g __read_mostly = 4; /* g = 1/2^n */
 module_param(ear_shift_g, uint, 0644);
 MODULE_PARM_DESC(ear_shift_g, "parameter g for updating ear_alpha");
 
@@ -80,21 +80,13 @@ static unsigned int ear_rtt_threshold_factor __read_mostly = EAR_RTT_THRESHOLD_F
 module_param(ear_rtt_threshold_factor, uint, 0644);
 MODULE_PARM_DESC(ear_rtt_threshold_factor, "parameter for initial rtt threshold factor (scaled by 1024)");
 
-static unsigned int ear_rtt_base_update_g __read_mostly = EAR_RTT_THRESHOLD_FACTOR_ON_INIT;
-module_param(ear_rtt_base_update_g, uint, 0644);
-MODULE_PARM_DESC(ear_rtt_base_update_g, "parameter for initial rtt threshold factor (scaled by 1024)");
-
 static unsigned int ear_h_enable __read_mostly = 0;
 module_param(ear_h_enable, uint, 0644);
 MODULE_PARM_DESC(ear_h_enable, "parameter for enabling ear adaptive congestion avoidance");
 
-static unsigned int ear_h_on_init __read_mostly = EAR_MIN_H;
+static unsigned int ear_h_on_init __read_mostly = EAR_SCALE;
 module_param(ear_h_on_init, uint, 0644);
 MODULE_PARM_DESC(ear_h_on_init, "parameter for initial h value");
-
-static unsigned int ear_fast_loss_recovery __read_mostly = 0;
-module_param(ear_fast_loss_recovery, uint, 0644);
-MODULE_PARM_DESC(ear_fast_loss_recovery, "parameter for ear fast loss recovery");
 
 static unsigned int ear_clamp_alpha_on_loss __read_mostly;
 module_param(ear_clamp_alpha_on_loss, uint, 0644);
@@ -105,10 +97,10 @@ static struct tcp_congestion_ops ear_reno;
 static void ear_reset(const struct tcp_sock *tp, struct ear *ca)
 {
 	ca->next_seq = tp->snd_nxt;
-	ca->last_rtt_cwnd = tp->snd_cwnd;
 	ca->acked_bytes_ecn = 0;
 	ca->acked_bytes_total = 0;
 	ca->rtt_count = 0;
+	ca->rtt_sum = 0;
 	ca->rtt_min = 0x7fffffff;
 }
 
@@ -128,12 +120,11 @@ static void ear_init(struct sock *sk)
 		ca->ear_h = min(ear_h_on_init, EAR_MAX_H);
 
 		ca->delayed_ack_reserved = 0;
-		ca->cwr_cwnd = 0;
 		ca->loss_cwnd = 0;
-		ca->last_rtt_cwnd = 0x7fffffff;
 		ca->ce_state = 0;
 		ca->prior_ca_state = 0;
 		ca->rtt_base = 0x7fffffff;
+		ca->rtt_ave = 0;
 
 		ear_reset(tp, ca);
 		return;
@@ -151,7 +142,7 @@ static u32 ear_cwnd_ecn(struct sock *sk) {
 	struct tcp_sock *tp = tcp_sk(sk);
 	if (ear_f_enable && ca->rtt_base != 0x7fffffff) {
 		u32 f = 8*ear_k*EAR_SCALE/(ear_c*ca->rtt_base/ear_pkt_size/1000000 + ear_k);
-		u32 cwnd_reduction = (tp->snd_cwnd * ca->ear_alpha * f) >> 21U;
+		u32 cwnd_reduction = (tp->snd_cwnd * (ca->ear_alpha + 64)* f) >> 21U;
 		if (tp->snd_cwnd > cwnd_reduction + 2)
 			return (tp->snd_cwnd - cwnd_reduction);
 		else
@@ -171,9 +162,21 @@ static u32 ear_ssthresh(struct sock *sk)
 {
 	struct ear *ca = inet_csk_ca(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
+	u32 cwnd_temp = tp->snd_cwnd;
+	u32 cwnd_ecn = 0x7fffffff;
+	u32 cwnd_rtt = 0x7fffffff;
 
-	ca->cwr_cwnd = tp->snd_cwnd;
-	return ear_cwnd_ecn(sk);
+	ca->loss_cwnd = tp->snd_cwnd;
+
+	cwnd_ecn = ear_cwnd_ecn(sk);
+
+	if (ear_rtt_enable) {
+		if (ca->rtt_count && ca->rtt_min > ((ca->rtt_base*ear_rtt_threshold_factor) >> 10U) + ear_rtt_threshold_headroom)
+			cwnd_rtt = ear_cwnd_rtt(sk);
+	}
+
+	cwnd_temp = min(cwnd_ecn, cwnd_rtt);
+	return min(tp->snd_cwnd, cwnd_temp);
 }
 
 /* Minimal DCTCP CE state machine:
@@ -265,6 +268,9 @@ static void ear_in_ack_event(struct sock *sk, u32 flags)
 	if (!before(tp->snd_una, ca->next_seq)) {
 		u64 bytes_ecn = ca->acked_bytes_ecn;
 		u32 alpha = ca->ear_alpha;
+		u32 cwnd_temp = tp->snd_cwnd;
+		u32 cwnd_ecn = 0x7fffffff;
+		u32 cwnd_rtt = 0x7fffffff;
 
 		/* alpha = (1 - g) * alpha + g * F */
 		alpha -= min_not_zero(alpha, alpha >> ear_shift_g);
@@ -283,12 +289,21 @@ static void ear_in_ack_event(struct sock *sk, u32 flags)
 		 */
 		WRITE_ONCE(ca->ear_alpha, alpha);
 
+		if (ca->rtt_count) {
+			u32 rtt_ave = ca->rtt_sum / ca->rtt_count;
+			ca->rtt_ave = ca->rtt_ave - (ca->rtt_ave >> ear_shift_g) + (rtt_ave >> ear_shift_g);
+		}
+
+		//if (bytes_ecn)
+			//cwnd_ecn = ear_cwnd_ecn(sk);
+
 		if (ear_rtt_enable) {
-			u32 cwnd_rtt = 0x7fffffff;
 			if (ca->rtt_count && ca->rtt_min > ((ca->rtt_base*ear_rtt_threshold_factor) >> 10U) + ear_rtt_threshold_headroom)
 				cwnd_rtt = ear_cwnd_rtt(sk);
-			tp->snd_cwnd = min(tp->snd_cwnd, cwnd_rtt);
 		}
+
+		cwnd_temp = min(cwnd_ecn, cwnd_rtt);
+		tp->snd_cwnd = min(tp->snd_cwnd, cwnd_temp);
 
 		ear_reset(tp, ca);
 	}
@@ -314,26 +329,13 @@ static void ear_pkts_acked(struct sock *sk, const struct ack_sample *sample)
 	 * the current prop. delay + queuing delay:
 	 */
 	ca->rtt_min = min(ca->rtt_min, vrtt);
+	ca->rtt_sum += vrtt;
 	ca->rtt_count++;
 }
 
 static void ear_state(struct sock *sk, u8 new_state)
 {
-	struct tcp_sock *tp = tcp_sk(sk);
 	struct ear *ca = inet_csk_ca(sk);
-	
-	if (ear_fast_loss_recovery) {
-		if (new_state != ca->prior_ca_state) {
-			if (new_state >= TCP_CA_Recovery && ca->prior_ca_state < TCP_CA_Recovery)
-				/* Entering loss recovery; save current cwnd. */
-				ca->loss_cwnd = tp->snd_cwnd;
-			if (ca->prior_ca_state >= TCP_CA_Recovery && new_state < TCP_CA_Recovery)
-				/* Exiting loss recovery; restore cwnd saved before recovery. */
-				tp->snd_cwnd = max(tp->snd_cwnd, 
-					max(ca->loss_cwnd - ((ca->loss_cwnd * ca->ear_alpha) >> 11U), 2U));
-			ca->prior_ca_state = new_state;
-		}
-	}
 
 	if (ear_clamp_alpha_on_loss && new_state == TCP_CA_Loss)
 		/* If this extension is enabled, we clamp dctcp_alpha to
@@ -345,6 +347,8 @@ static void ear_state(struct sock *sk, u8 new_state)
 		 * window by half.
 		 */
 		ca->ear_alpha = EAR_SCALE;
+
+	ca->prior_ca_state = new_state;
 }
 
 static void ear_update_ack_reserved(struct sock *sk, enum tcp_ca_event ev)
@@ -414,15 +418,16 @@ static u32 ear_cwnd_undo(struct sock *sk)
 {
 	const struct ear *ca = inet_csk_ca(sk);
 
-	return max(tcp_sk(sk)->snd_cwnd, ca->cwr_cwnd);
+	return max(tcp_sk(sk)->snd_cwnd, ca->loss_cwnd);
 }
 
 static void ear_cong_avoid_ai(struct tcp_sock *tp, u32 w, u32 acked, u32 step)
 {
 	/* If credits accumulated at a higher w, apply them gently now. */
+	w = max(w * EAR_SCALE / step, 1U);
 	if (tp->snd_cwnd_cnt >= w) {
 		tp->snd_cwnd_cnt = 0;
-		tp->snd_cwnd += step;
+		tp->snd_cwnd += 1;
 	}
 
 	tp->snd_cwnd_cnt += acked;
@@ -430,7 +435,7 @@ static void ear_cong_avoid_ai(struct tcp_sock *tp, u32 w, u32 acked, u32 step)
 		u32 delta = tp->snd_cwnd_cnt / w;
 
 		tp->snd_cwnd_cnt -= delta * w;
-		tp->snd_cwnd += delta*step;
+		tp->snd_cwnd += delta;
 	}
 	tp->snd_cwnd = min(tp->snd_cwnd, tp->snd_cwnd_clamp);
 }
@@ -450,16 +455,16 @@ static void ear_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 			return;
 	}
 	/* In dangerous area, increase slowly. */
-	if (ear_h_enable) {
-		if (ca->rtt_base < EAR_MIN_H_RTT)
+	if (ear_h_enable && ca->rtt_ave) {
+		if (ca->rtt_ave < EAR_MIN_H_RTT)
 			ca->ear_h = EAR_MIN_H;
-		else if (ca->rtt_base > EAR_MAX_H_RTT)
-			ca->ear_h = EAR_MAX_H;
 		else
-			ca->ear_h = ca->rtt_base / EAR_MAX_H_RTT;
+			ca->ear_h = (ca->rtt_ave - EAR_MIN_H_RTT)*EAR_H_FACTOR/EAR_SCALE + EAR_MIN_H;
 		ca->ear_h = min(ca->ear_h, EAR_MAX_H);
 		ca->ear_h = max(ca->ear_h, EAR_MIN_H);
 	}
+	else
+		ca->ear_h = EAR_SCALE;
 	ear_cong_avoid_ai(tp, tp->snd_cwnd, acked, ca->ear_h);
 }
 
