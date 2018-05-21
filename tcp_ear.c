@@ -15,7 +15,6 @@
 #define EAR_PKT_SIZE_DEFAULT 12U // Kbits
 #define EAR_K_DEFAULT 300U // pkts
 #define EAR_RTT_THRESHOLD_HEADROOM_ON_INIT 5000U // us
-#define EAR_RTT_THRESHOLD_FACTOR_ON_INIT 1024U // scaled by EAR_SCALE
 #define EAR_MIN_H_RTT 3000U
 #define EAR_H_FACTOR 120U // scaled by EAR_SCALE
 #define EAR_MIN_H 100U // scaled by EAR_SCALE
@@ -27,6 +26,7 @@ struct ear {
 	u16	rtt_count;
 	u32 rtt_sum;
 	u32	rtt_min;
+	u32	rtt_max;
 	u32	rtt_ave;
 	u32	rtt_base;
 	u32 prior_snd_una;
@@ -76,11 +76,7 @@ static unsigned int ear_rtt_threshold_headroom __read_mostly = EAR_RTT_THRESHOLD
 module_param(ear_rtt_threshold_headroom, uint, 0644);
 MODULE_PARM_DESC(ear_rtt_threshold_headroom, "parameter for initial rtt threshold headroom (us)");
 
-static unsigned int ear_rtt_threshold_factor __read_mostly = EAR_RTT_THRESHOLD_FACTOR_ON_INIT;
-module_param(ear_rtt_threshold_factor, uint, 0644);
-MODULE_PARM_DESC(ear_rtt_threshold_factor, "parameter for initial rtt threshold factor (scaled by 1024)");
-
-static unsigned int ear_h_enable __read_mostly = 0;
+static unsigned int ear_h_enable __read_mostly = 1;
 module_param(ear_h_enable, uint, 0644);
 MODULE_PARM_DESC(ear_h_enable, "parameter for enabling ear adaptive congestion avoidance");
 
@@ -102,6 +98,7 @@ static void ear_reset(const struct tcp_sock *tp, struct ear *ca)
 	ca->rtt_count = 0;
 	ca->rtt_sum = 0;
 	ca->rtt_min = 0x7fffffff;
+	ca->rtt_max = 0;
 }
 
 static void ear_init(struct sock *sk)
@@ -171,7 +168,7 @@ static u32 ear_ssthresh(struct sock *sk)
 	cwnd_ecn = ear_cwnd_ecn(sk);
 
 	if (ear_rtt_enable) {
-		if (ca->rtt_count && ca->rtt_min > ((ca->rtt_base*ear_rtt_threshold_factor) >> 10U) + ear_rtt_threshold_headroom)
+		if (ca->rtt_count && ca->rtt_min > ca->rtt_base + ear_rtt_threshold_headroom)
 			cwnd_rtt = ear_cwnd_rtt(sk);
 	}
 
@@ -294,16 +291,19 @@ static void ear_in_ack_event(struct sock *sk, u32 flags)
 			ca->rtt_ave = ca->rtt_ave - (ca->rtt_ave >> ear_shift_g) + (rtt_ave >> ear_shift_g);
 		}
 
-		//if (bytes_ecn)
-			//cwnd_ecn = ear_cwnd_ecn(sk);
+		if (bytes_ecn)
+			cwnd_ecn = ear_cwnd_ecn(sk);
 
 		if (ear_rtt_enable) {
-			if (ca->rtt_count && ca->rtt_min > ((ca->rtt_base*ear_rtt_threshold_factor) >> 10U) + ear_rtt_threshold_headroom)
+			if (ca->rtt_count && ca->rtt_min > ca->rtt_base + ear_rtt_threshold_headroom)
 				cwnd_rtt = ear_cwnd_rtt(sk);
 		}
 
 		cwnd_temp = min(cwnd_ecn, cwnd_rtt);
-		tp->snd_cwnd = min(tp->snd_cwnd, cwnd_temp);
+		if (cwnd_temp < tp->snd_cwnd) {
+			tp->snd_cwnd = cwnd_temp;
+			tp->snd_ssthresh = tp->snd_cwnd-1;
+		}
 
 		ear_reset(tp, ca);
 	}
@@ -317,9 +317,15 @@ static void ear_pkts_acked(struct sock *sk, const struct ack_sample *sample)
 
 	if (sample->rtt_us < 0)
 		return;
+	
+	/* Adding RTT errors for experiment test */
+	u32 i, error, error_max;
+	get_random_bytes(&i, sizeof(i));
+	error_max = 1;
+	error = i % error_max;
 
 	/* Never allow zero rtt or rtt_base */
-	vrtt = sample->rtt_us + 1;
+	vrtt = sample->rtt_us + 1 + error;
 
 	/* Filter to find propagation delay: */
 	if (vrtt < ca->rtt_base)
@@ -329,6 +335,7 @@ static void ear_pkts_acked(struct sock *sk, const struct ack_sample *sample)
 	 * the current prop. delay + queuing delay:
 	 */
 	ca->rtt_min = min(ca->rtt_min, vrtt);
+	ca->rtt_max = max(ca->rtt_max, vrtt);
 	ca->rtt_sum += vrtt;
 	ca->rtt_count++;
 }
@@ -459,7 +466,7 @@ static void ear_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 		if (ca->rtt_ave < EAR_MIN_H_RTT)
 			ca->ear_h = EAR_MIN_H;
 		else
-			ca->ear_h = (ca->rtt_ave - EAR_MIN_H_RTT)*EAR_H_FACTOR/EAR_SCALE + EAR_MIN_H;
+			ca->ear_h = (ca->rtt_ave - EAR_MIN_H_RTT)*ear_c/EAR_C_DEFAULT*EAR_H_FACTOR/EAR_SCALE + EAR_MIN_H;
 		ca->ear_h = min(ca->ear_h, EAR_MAX_H);
 		ca->ear_h = max(ca->ear_h, EAR_MIN_H);
 	}
