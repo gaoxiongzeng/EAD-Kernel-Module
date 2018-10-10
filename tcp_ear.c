@@ -18,24 +18,24 @@
 #define EAR_BASE_RTT_UPDATE 10U
 
 struct ear {
-	u32 acked_bytes_ecn;
-	u32 acked_bytes_total;
-	u16	rtt_count;
-	u32 rtt_sum;
-	u32	rtt_min;
-	u32	rtt_max;
-	u32	rtt_ave;
-	u32	rtt_base;
-	u32 prior_snd_una;
-	u32 prior_rcv_nxt;
-	u32 ear_alpha;
-	u32 ear_h;
-	u32 next_seq;
-	u32 ce_state;
-	u32 delayed_ack_reserved;
-	u32 loss_cwnd;
+    u32 acked_bytes_ecn;
+    u32 acked_bytes_total;
+    u16 rtt_count;
+    u32 rtt_sum;
+    u32 rtt_min;
+    u32 rtt_max;
+    u32 rtt_ave;
+    u32 rtt_base;
+    u32 prior_snd_una;
+    u32 prior_rcv_nxt;
+    u32 ear_alpha;
+    u32 ear_h;
+    u32 next_seq;
+    u32 ce_state;
+    u32 delayed_ack_reserved;
+    u32 loss_cwnd;
     u32 cwnd_update_count;
-	u8 prior_ca_state;
+    u8 prior_ca_state;
 };
 
 static unsigned int ear_shift_g __read_mostly = 4; /* g = 1/2^n */
@@ -90,220 +90,220 @@ static struct tcp_congestion_ops ear_reno;
 
 static void ear_reset(const struct tcp_sock *tp, struct ear *ca)
 {
-	ca->next_seq = tp->snd_nxt;
-	ca->acked_bytes_ecn = 0;
-	ca->acked_bytes_total = 0;
-	ca->rtt_count = 0;
-	ca->rtt_sum = 0;
-	ca->rtt_min = 0x7fffffff;
-	ca->rtt_max = 0;
+    ca->next_seq = tp->snd_nxt;
+    ca->acked_bytes_ecn = 0;
+    ca->acked_bytes_total = 0;
+    ca->rtt_count = 0;
+    ca->rtt_sum = 0;
+    ca->rtt_min = 0x7fffffff;
+    ca->rtt_max = 0;
 }
 
 static void ear_init(struct sock *sk)
 {
-	const struct tcp_sock *tp = tcp_sk(sk);
+    const struct tcp_sock *tp = tcp_sk(sk);
 
-	if ((tp->ecn_flags & TCP_ECN_OK) ||
-	    (sk->sk_state == TCP_LISTEN ||
-	     sk->sk_state == TCP_CLOSE)) {
-		struct ear *ca = inet_csk_ca(sk);
+    if ((tp->ecn_flags & TCP_ECN_OK) ||
+        (sk->sk_state == TCP_LISTEN ||
+         sk->sk_state == TCP_CLOSE)) {
+        struct ear *ca = inet_csk_ca(sk);
 
-		ca->prior_snd_una = tp->snd_una;
-		ca->prior_rcv_nxt = tp->rcv_nxt;
+        ca->prior_snd_una = tp->snd_una;
+        ca->prior_rcv_nxt = tp->rcv_nxt;
 
-		ca->ear_alpha = min(ear_alpha_on_init, EAR_SCALE);
-		ca->ear_h = min(ear_h_on_init, EAR_MAX_H);
+        ca->ear_alpha = min(ear_alpha_on_init, EAR_SCALE);
+        ca->ear_h = min(ear_h_on_init, EAR_MAX_H);
 
-		ca->delayed_ack_reserved = 0;
-		ca->loss_cwnd = 0;
+        ca->delayed_ack_reserved = 0;
+        ca->loss_cwnd = 0;
         ca->cwnd_update_count = 0;
-		ca->ce_state = 0;
-		ca->prior_ca_state = 0;
-		ca->rtt_base = 0x7fffffff;
-		ca->rtt_ave = 0;
+        ca->ce_state = 0;
+        ca->prior_ca_state = 0;
+        ca->rtt_base = 0x7fffffff;
+        ca->rtt_ave = 0;
 
-		ear_reset(tp, ca);
-		return;
-	}
+        ear_reset(tp, ca);
+        return;
+    }
 
-	/* No ECN support? Fall back to Reno. Also need to clear
-	 * ECT from sk since it is set during 3WHS for ear.
-	 */
-	inet_csk(sk)->icsk_ca_ops = &ear_reno;
-	INET_ECN_dontxmit(sk);
+    /* No ECN support? Fall back to Reno. Also need to clear
+     * ECT from sk since it is set during 3WHS for ear.
+     */
+    inet_csk(sk)->icsk_ca_ops = &ear_reno;
+    INET_ECN_dontxmit(sk);
 }
 
 static u32 ear_cwnd_ecn(struct sock *sk) {
-	struct ear *ca = inet_csk_ca(sk);
-	struct tcp_sock *tp = tcp_sk(sk);
-	if (ear_f_enable && ca->rtt_base != 0x7fffffff) {
-		u32 f = 8*ear_k*EAR_SCALE/(ear_c*ca->rtt_base/ear_pkt_size/1000000 + ear_k);
-		u32 cwnd_reduction = (tp->snd_cwnd * (ca->ear_alpha + 64)* f) >> 21U;
-		if (tp->snd_cwnd > cwnd_reduction + 2)
-			return (tp->snd_cwnd - cwnd_reduction);
-		else
-			return 2;
-	}
-	else
-		return max(tp->snd_cwnd - ((tp->snd_cwnd * ca->ear_alpha) >> 11U), 2U);
+    struct ear *ca = inet_csk_ca(sk);
+    struct tcp_sock *tp = tcp_sk(sk);
+    if (ear_f_enable && ca->rtt_base != 0x7fffffff) {
+        u32 f = 8*ear_k*EAR_SCALE/(ear_c*ca->rtt_base/ear_pkt_size/1000000 + ear_k);
+        u32 cwnd_reduction = (tp->snd_cwnd * (ca->ear_alpha + 64)* f) >> 21U;
+        if (tp->snd_cwnd > cwnd_reduction + 2)
+            return (tp->snd_cwnd - cwnd_reduction);
+        else
+            return 2;
+    }
+    else
+        return max(tp->snd_cwnd - ((tp->snd_cwnd * ca->ear_alpha) >> 11U), 2U);
 }
 
 static u32 ear_cwnd_rtt(struct sock *sk) {
-	//struct ear *ca = inet_csk_ca(sk);
-	struct tcp_sock *tp = tcp_sk(sk);
-	return max(tp->snd_cwnd - ((tp->snd_cwnd * ear_beta) >> 10U), 2U);
+    //struct ear *ca = inet_csk_ca(sk);
+    struct tcp_sock *tp = tcp_sk(sk);
+    return max(tp->snd_cwnd - ((tp->snd_cwnd * ear_beta) >> 10U), 2U);
 }
 
 static u32 ear_ssthresh(struct sock *sk)
 {
-	struct ear *ca = inet_csk_ca(sk);
-	struct tcp_sock *tp = tcp_sk(sk);
-	u32 cwnd_temp = tp->snd_cwnd;
-	u32 cwnd_ecn = 0x7fffffff;
-	u32 cwnd_rtt = 0x7fffffff;
+    struct ear *ca = inet_csk_ca(sk);
+    struct tcp_sock *tp = tcp_sk(sk);
+    u32 cwnd_temp = tp->snd_cwnd;
+    u32 cwnd_ecn = 0x7fffffff;
+    u32 cwnd_rtt = 0x7fffffff;
 
-	ca->loss_cwnd = tp->snd_cwnd;
+    ca->loss_cwnd = tp->snd_cwnd;
     ca->cwnd_update_count++;
 
-	cwnd_ecn = ear_cwnd_ecn(sk);
+    cwnd_ecn = ear_cwnd_ecn(sk);
 
-	if (ear_rtt_enable) {
-		if (ca->rtt_count && ca->rtt_min > ca->rtt_base + ear_rtt_threshold_headroom)
-			cwnd_rtt = ear_cwnd_rtt(sk);
-	}
+    if (ear_rtt_enable) {
+        if (ca->rtt_count && ca->rtt_min > ca->rtt_base + ear_rtt_threshold_headroom)
+            cwnd_rtt = ear_cwnd_rtt(sk);
+    }
 
-	cwnd_temp = min(cwnd_ecn, cwnd_rtt);
-	return min(tp->snd_cwnd, cwnd_temp);
+    cwnd_temp = min(cwnd_ecn, cwnd_rtt);
+    return min(tp->snd_cwnd, cwnd_temp);
 }
 
 /* Minimal DCTCP CE state machine:
  *
- * S:	0 <- last pkt was non-CE
- *	1 <- last pkt was CE
+ * S:   0 <- last pkt was non-CE
+ *  1 <- last pkt was CE
  */
 
 static void ear_ce_state_0_to_1(struct sock *sk)
 {
-	struct ear *ca = inet_csk_ca(sk);
-	struct tcp_sock *tp = tcp_sk(sk);
+    struct ear *ca = inet_csk_ca(sk);
+    struct tcp_sock *tp = tcp_sk(sk);
 
-	/* State has changed from CE=0 to CE=1 and delayed
-	 * ACK has not sent yet.
-	 */
-	if (!ca->ce_state && ca->delayed_ack_reserved) {
-		u32 tmp_rcv_nxt;
+    /* State has changed from CE=0 to CE=1 and delayed
+     * ACK has not sent yet.
+     */
+    if (!ca->ce_state && ca->delayed_ack_reserved) {
+        u32 tmp_rcv_nxt;
 
-		/* Save current rcv_nxt. */
-		tmp_rcv_nxt = tp->rcv_nxt;
+        /* Save current rcv_nxt. */
+        tmp_rcv_nxt = tp->rcv_nxt;
 
-		/* Generate previous ack with CE=0. */
-		tp->ecn_flags &= ~TCP_ECN_DEMAND_CWR;
-		tp->rcv_nxt = ca->prior_rcv_nxt;
+        /* Generate previous ack with CE=0. */
+        tp->ecn_flags &= ~TCP_ECN_DEMAND_CWR;
+        tp->rcv_nxt = ca->prior_rcv_nxt;
 
-		tcp_send_ack(sk);
+        tcp_send_ack(sk);
 
-		/* Recover current rcv_nxt. */
-		tp->rcv_nxt = tmp_rcv_nxt;
-	}
+        /* Recover current rcv_nxt. */
+        tp->rcv_nxt = tmp_rcv_nxt;
+    }
 
-	ca->prior_rcv_nxt = tp->rcv_nxt;
-	ca->ce_state = 1;
+    ca->prior_rcv_nxt = tp->rcv_nxt;
+    ca->ce_state = 1;
 
-	tp->ecn_flags |= TCP_ECN_DEMAND_CWR;
+    tp->ecn_flags |= TCP_ECN_DEMAND_CWR;
 }
 
 static void ear_ce_state_1_to_0(struct sock *sk)
 {
-	struct ear *ca = inet_csk_ca(sk);
-	struct tcp_sock *tp = tcp_sk(sk);
+    struct ear *ca = inet_csk_ca(sk);
+    struct tcp_sock *tp = tcp_sk(sk);
 
-	/* State has changed from CE=1 to CE=0 and delayed
-	 * ACK has not sent yet.
-	 */
-	if (ca->ce_state && ca->delayed_ack_reserved) {
-		u32 tmp_rcv_nxt;
+    /* State has changed from CE=1 to CE=0 and delayed
+     * ACK has not sent yet.
+     */
+    if (ca->ce_state && ca->delayed_ack_reserved) {
+        u32 tmp_rcv_nxt;
 
-		/* Save current rcv_nxt. */
-		tmp_rcv_nxt = tp->rcv_nxt;
+        /* Save current rcv_nxt. */
+        tmp_rcv_nxt = tp->rcv_nxt;
 
-		/* Generate previous ack with CE=1. */
-		tp->ecn_flags |= TCP_ECN_DEMAND_CWR;
-		tp->rcv_nxt = ca->prior_rcv_nxt;
+        /* Generate previous ack with CE=1. */
+        tp->ecn_flags |= TCP_ECN_DEMAND_CWR;
+        tp->rcv_nxt = ca->prior_rcv_nxt;
 
-		tcp_send_ack(sk);
+        tcp_send_ack(sk);
 
-		/* Recover current rcv_nxt. */
-		tp->rcv_nxt = tmp_rcv_nxt;
-	}
+        /* Recover current rcv_nxt. */
+        tp->rcv_nxt = tmp_rcv_nxt;
+    }
 
-	ca->prior_rcv_nxt = tp->rcv_nxt;
-	ca->ce_state = 0;
+    ca->prior_rcv_nxt = tp->rcv_nxt;
+    ca->ce_state = 0;
 
-	tp->ecn_flags &= ~TCP_ECN_DEMAND_CWR;
+    tp->ecn_flags &= ~TCP_ECN_DEMAND_CWR;
 }
 
 static void ear_in_ack_event(struct sock *sk, u32 flags)
 {
-	struct tcp_sock *tp = tcp_sk(sk);
-	struct ear *ca = inet_csk_ca(sk);
-	u32 acked_bytes = tp->snd_una - ca->prior_snd_una;
+    struct tcp_sock *tp = tcp_sk(sk);
+    struct ear *ca = inet_csk_ca(sk);
+    u32 acked_bytes = tp->snd_una - ca->prior_snd_una;
 
-	/* If ack did not advance snd_una, count dupack as MSS size.
-	 * If ack did update window, do not count it at all.
-	 */
-	if (acked_bytes == 0 && !(flags & CA_ACK_WIN_UPDATE))
-		acked_bytes = inet_csk(sk)->icsk_ack.rcv_mss;
-	if (acked_bytes) {
-		ca->acked_bytes_total += acked_bytes;
-		ca->prior_snd_una = tp->snd_una;
+    /* If ack did not advance snd_una, count dupack as MSS size.
+     * If ack did update window, do not count it at all.
+     */
+    if (acked_bytes == 0 && !(flags & CA_ACK_WIN_UPDATE))
+        acked_bytes = inet_csk(sk)->icsk_ack.rcv_mss;
+    if (acked_bytes) {
+        ca->acked_bytes_total += acked_bytes;
+        ca->prior_snd_una = tp->snd_una;
 
-		if (flags & CA_ACK_ECE)
-			ca->acked_bytes_ecn += acked_bytes;
-	}
+        if (flags & CA_ACK_ECE)
+            ca->acked_bytes_ecn += acked_bytes;
+    }
 
-	/* Once per RTT */
-	if (!before(tp->snd_una, ca->next_seq)) {
-		u64 bytes_ecn = ca->acked_bytes_ecn;
-		u32 alpha = ca->ear_alpha;
-		u32 cwnd_temp = tp->snd_cwnd;
-		u32 cwnd_ecn = 0x7fffffff;
-		u32 cwnd_rtt = 0x7fffffff;
+    /* Once per RTT */
+    if (!before(tp->snd_una, ca->next_seq)) {
+        u64 bytes_ecn = ca->acked_bytes_ecn;
+        u32 alpha = ca->ear_alpha;
+        u32 cwnd_temp = tp->snd_cwnd;
+        u32 cwnd_ecn = 0x7fffffff;
+        u32 cwnd_rtt = 0x7fffffff;
 
-		/* alpha = (1 - g) * alpha + g * F */
-		alpha -= min_not_zero(alpha, alpha >> ear_shift_g);
-		if (bytes_ecn) {
-			/* If ear_shift_g == 1, a 32bit value would overflow
-			 * after 8 Mbytes.
-			 */
-			bytes_ecn <<= (10 - ear_shift_g);
-			do_div(bytes_ecn, max(1U, ca->acked_bytes_total));
+        /* alpha = (1 - g) * alpha + g * F */
+        alpha -= min_not_zero(alpha, alpha >> ear_shift_g);
+        if (bytes_ecn) {
+            /* If ear_shift_g == 1, a 32bit value would overflow
+             * after 8 Mbytes.
+             */
+            bytes_ecn <<= (10 - ear_shift_g);
+            do_div(bytes_ecn, max(1U, ca->acked_bytes_total));
 
-			alpha = min(alpha + (u32)bytes_ecn, EAR_SCALE);
-		}
-		/* ear_alpha can be read from ear_get_info() without
-		 * synchro, so we ask compiler to not use ear_alpha
-		 * as a temporary variable in prior operations.
-		 */
-		WRITE_ONCE(ca->ear_alpha, alpha);
+            alpha = min(alpha + (u32)bytes_ecn, EAR_SCALE);
+        }
+        /* ear_alpha can be read from ear_get_info() without
+         * synchro, so we ask compiler to not use ear_alpha
+         * as a temporary variable in prior operations.
+         */
+        WRITE_ONCE(ca->ear_alpha, alpha);
 
-		if (ca->rtt_count) {
-			u32 rtt_ave = ca->rtt_sum / ca->rtt_count;
-			ca->rtt_ave = ca->rtt_ave - (ca->rtt_ave >> ear_shift_g) + (rtt_ave >> ear_shift_g);
-		}
+        if (ca->rtt_count) {
+            u32 rtt_ave = ca->rtt_sum / ca->rtt_count;
+            ca->rtt_ave = ca->rtt_ave - (ca->rtt_ave >> ear_shift_g) + (rtt_ave >> ear_shift_g);
+        }
 
-		if (bytes_ecn)
-			cwnd_ecn = ear_cwnd_ecn(sk);
+        if (bytes_ecn)
+            cwnd_ecn = ear_cwnd_ecn(sk);
 
-		if (ear_rtt_enable) {
-			if (ca->rtt_count && ca->rtt_min > ca->rtt_base + ear_rtt_threshold_headroom)
-				cwnd_rtt = ear_cwnd_rtt(sk);
-		}
+        if (ear_rtt_enable) {
+            if (ca->rtt_count && ca->rtt_min > ca->rtt_base + ear_rtt_threshold_headroom)
+                cwnd_rtt = ear_cwnd_rtt(sk);
+        }
 
-		cwnd_temp = min(cwnd_ecn, cwnd_rtt);
-		if (cwnd_temp < tp->snd_cwnd) {
-			tp->snd_cwnd = cwnd_temp;
-			tp->snd_ssthresh = tp->snd_cwnd-1;
-		}
+        cwnd_temp = min(cwnd_ecn, cwnd_rtt);
+        if (cwnd_temp < tp->snd_cwnd) {
+            tp->snd_cwnd = cwnd_temp;
+            tp->snd_ssthresh = tp->snd_cwnd-1;
+        }
 
         ca->cwnd_update_count++;
         if (ca->cwnd_update_count > EAR_BASE_RTT_UPDATE && ca->rtt_min) {
@@ -311,208 +311,208 @@ static void ear_in_ack_event(struct sock *sk, u32 flags)
             ca->cwnd_update_count = 0;
         }
 
-		ear_reset(tp, ca);
-	}
+        ear_reset(tp, ca);
+    }
 }
 
 static void ear_pkts_acked(struct sock *sk, const struct ack_sample *sample)
 {
-	struct ear *ca = inet_csk_ca(sk);
+    struct ear *ca = inet_csk_ca(sk);
 
-	u32 vrtt;
+    u32 vrtt;
 
-	if (sample->rtt_us < 0)
-		return;
-	
-	/* Adding RTT errors for experiment test */
-	u32 i, error, error_max;
-	get_random_bytes(&i, sizeof(i));
-	error_max = 1;
-	error = i % error_max;
+    if (sample->rtt_us < 0)
+        return;
+    
+    /* Adding RTT errors for experiment test */
+    u32 i, error, error_max;
+    get_random_bytes(&i, sizeof(i));
+    error_max = 1;
+    error = i % error_max;
 
-	/* Never allow zero rtt or rtt_base */
-	vrtt = sample->rtt_us + 1 + error;
+    /* Never allow zero rtt or rtt_base */
+    vrtt = sample->rtt_us + 1 + error;
 
-	/* Filter to find propagation delay: */
-	if (vrtt < ca->rtt_base)
-		ca->rtt_base = vrtt;
+    /* Filter to find propagation delay: */
+    if (vrtt < ca->rtt_base)
+        ca->rtt_base = vrtt;
 
-	/* Find the min RTT during the last RTT to find
-	 * the current prop. delay + queuing delay:
-	 */
-	ca->rtt_min = min(ca->rtt_min, vrtt);
-	ca->rtt_max = max(ca->rtt_max, vrtt);
-	ca->rtt_sum += vrtt;
-	ca->rtt_count++;
+    /* Find the min RTT during the last RTT to find
+     * the current prop. delay + queuing delay:
+     */
+    ca->rtt_min = min(ca->rtt_min, vrtt);
+    ca->rtt_max = max(ca->rtt_max, vrtt);
+    ca->rtt_sum += vrtt;
+    ca->rtt_count++;
 }
 
 static void ear_state(struct sock *sk, u8 new_state)
 {
-	struct ear *ca = inet_csk_ca(sk);
+    struct ear *ca = inet_csk_ca(sk);
 
-	if (ear_clamp_alpha_on_loss && new_state == TCP_CA_Loss)
-		/* If this extension is enabled, we clamp dctcp_alpha to
-		 * max on packet loss; the motivation is that dctcp_alpha
-		 * is an indicator to the extend of congestion and packet
-		 * loss is an indicator of extreme congestion; setting
-		 * this in practice turned out to be beneficial, and
-		 * effectively assumes total congestion which reduces the
-		 * window by half.
-		 */
-		ca->ear_alpha = EAR_SCALE;
+    if (ear_clamp_alpha_on_loss && new_state == TCP_CA_Loss)
+        /* If this extension is enabled, we clamp dctcp_alpha to
+         * max on packet loss; the motivation is that dctcp_alpha
+         * is an indicator to the extend of congestion and packet
+         * loss is an indicator of extreme congestion; setting
+         * this in practice turned out to be beneficial, and
+         * effectively assumes total congestion which reduces the
+         * window by half.
+         */
+        ca->ear_alpha = EAR_SCALE;
 
-	ca->prior_ca_state = new_state;
+    ca->prior_ca_state = new_state;
 }
 
 static void ear_update_ack_reserved(struct sock *sk, enum tcp_ca_event ev)
 {
-	struct ear *ca = inet_csk_ca(sk);
+    struct ear *ca = inet_csk_ca(sk);
 
-	switch (ev) {
-	case CA_EVENT_DELAYED_ACK:
-		if (!ca->delayed_ack_reserved)
-			ca->delayed_ack_reserved = 1;
-		break;
-	case CA_EVENT_NON_DELAYED_ACK:
-		if (ca->delayed_ack_reserved)
-			ca->delayed_ack_reserved = 0;
-		break;
-	default:
-		/* Don't care for the rest. */
-		break;
-	}
+    switch (ev) {
+    case CA_EVENT_DELAYED_ACK:
+        if (!ca->delayed_ack_reserved)
+            ca->delayed_ack_reserved = 1;
+        break;
+    case CA_EVENT_NON_DELAYED_ACK:
+        if (ca->delayed_ack_reserved)
+            ca->delayed_ack_reserved = 0;
+        break;
+    default:
+        /* Don't care for the rest. */
+        break;
+    }
 }
 
 static void ear_cwnd_event(struct sock *sk, enum tcp_ca_event ev)
 {
-	switch (ev) {
-	case CA_EVENT_ECN_IS_CE:
-		ear_ce_state_0_to_1(sk);
-		break;
-	case CA_EVENT_ECN_NO_CE:
-		ear_ce_state_1_to_0(sk);
-		break;
-	case CA_EVENT_DELAYED_ACK:
-	case CA_EVENT_NON_DELAYED_ACK:
-		ear_update_ack_reserved(sk, ev);
-		break;
-	default:
-		/* Don't care for the rest. */
-		break;
-	}
+    switch (ev) {
+    case CA_EVENT_ECN_IS_CE:
+        ear_ce_state_0_to_1(sk);
+        break;
+    case CA_EVENT_ECN_NO_CE:
+        ear_ce_state_1_to_0(sk);
+        break;
+    case CA_EVENT_DELAYED_ACK:
+    case CA_EVENT_NON_DELAYED_ACK:
+        ear_update_ack_reserved(sk, ev);
+        break;
+    default:
+        /* Don't care for the rest. */
+        break;
+    }
 }
 
 static size_t ear_get_info(struct sock *sk, u32 ext, int *attr,
-			     union tcp_cc_info *info)
+                 union tcp_cc_info *info)
 {
-	const struct ear *ca = inet_csk_ca(sk);
+    const struct ear *ca = inet_csk_ca(sk);
 
-	/* Fill it also in case of VEGASINFO due to req struct limits.
-	 * We can still correctly retrieve it later.
-	 */
-	if (ext & (1 << (INET_DIAG_EARINFO - 1)) ||
-	    ext & (1 << (INET_DIAG_VEGASINFO - 1))) {
-		memset(&info->ear, 0, sizeof(info->ear));
-		if (inet_csk(sk)->icsk_ca_ops != &ear_reno) {
-			info->ear.ear_enabled = 1;
-			info->ear.ear_ce_state = (u16) ca->ce_state;
-			info->ear.ear_alpha = ca->ear_alpha;
-			info->ear.ear_ab_ecn = ca->acked_bytes_ecn;
-			info->ear.ear_ab_tot = ca->acked_bytes_total;
-		}
+    /* Fill it also in case of VEGASINFO due to req struct limits.
+     * We can still correctly retrieve it later.
+     */
+    if (ext & (1 << (INET_DIAG_EARINFO - 1)) ||
+        ext & (1 << (INET_DIAG_VEGASINFO - 1))) {
+        memset(&info->ear, 0, sizeof(info->ear));
+        if (inet_csk(sk)->icsk_ca_ops != &ear_reno) {
+            info->ear.ear_enabled = 1;
+            info->ear.ear_ce_state = (u16) ca->ce_state;
+            info->ear.ear_alpha = ca->ear_alpha;
+            info->ear.ear_ab_ecn = ca->acked_bytes_ecn;
+            info->ear.ear_ab_tot = ca->acked_bytes_total;
+        }
 
-		*attr = INET_DIAG_EARINFO;
-		return sizeof(info->ear);
-	}
-	return 0;
+        *attr = INET_DIAG_EARINFO;
+        return sizeof(info->ear);
+    }
+    return 0;
 }
 
 static u32 ear_cwnd_undo(struct sock *sk)
 {
-	const struct ear *ca = inet_csk_ca(sk);
+    const struct ear *ca = inet_csk_ca(sk);
 
-	return max(tcp_sk(sk)->snd_cwnd, ca->loss_cwnd);
+    return max(tcp_sk(sk)->snd_cwnd, ca->loss_cwnd);
 }
 
 static void ear_cong_avoid_ai(struct tcp_sock *tp, u32 w, u32 acked, u32 step)
 {
-	/* If credits accumulated at a higher w, apply them gently now. */
-	w = max(w * EAR_SCALE / step, 1U);
-	if (tp->snd_cwnd_cnt >= w) {
-		tp->snd_cwnd_cnt = 0;
-		tp->snd_cwnd += 1;
-	}
+    /* If credits accumulated at a higher w, apply them gently now. */
+    w = max(w * EAR_SCALE / step, 1U);
+    if (tp->snd_cwnd_cnt >= w) {
+        tp->snd_cwnd_cnt = 0;
+        tp->snd_cwnd += 1;
+    }
 
-	tp->snd_cwnd_cnt += acked;
-	if (tp->snd_cwnd_cnt >= w) {
-		u32 delta = tp->snd_cwnd_cnt / w;
+    tp->snd_cwnd_cnt += acked;
+    if (tp->snd_cwnd_cnt >= w) {
+        u32 delta = tp->snd_cwnd_cnt / w;
 
-		tp->snd_cwnd_cnt -= delta * w;
-		tp->snd_cwnd += delta;
-	}
-	tp->snd_cwnd = min(tp->snd_cwnd, tp->snd_cwnd_clamp);
+        tp->snd_cwnd_cnt -= delta * w;
+        tp->snd_cwnd += delta;
+    }
+    tp->snd_cwnd = min(tp->snd_cwnd, tp->snd_cwnd_clamp);
 }
 
 static void ear_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 {
-	struct tcp_sock *tp = tcp_sk(sk);
-	struct ear *ca = inet_csk_ca(sk);
+    struct tcp_sock *tp = tcp_sk(sk);
+    struct ear *ca = inet_csk_ca(sk);
 
-	if (!tcp_is_cwnd_limited(sk))
-		return;
+    if (!tcp_is_cwnd_limited(sk))
+        return;
 
-	/* In "safe" area, increase. */
-	if (tcp_in_slow_start(tp)) {
-		acked = tcp_slow_start(tp, acked);
-		if (!acked)
-			return;
-	}
-	/* In dangerous area, increase slowly. */
-	if (ear_h_enable && ca->rtt_ave) {
-		if (ca->rtt_ave < EAR_MIN_H_RTT)
-			ca->ear_h = EAR_MIN_H;
-		else
-			ca->ear_h = (ca->rtt_ave - EAR_MIN_H_RTT)*ear_c/EAR_C_DEFAULT*EAR_H_FACTOR/EAR_SCALE + EAR_MIN_H;
-		ca->ear_h = min(ca->ear_h, EAR_MAX_H);
-		ca->ear_h = max(ca->ear_h, EAR_MIN_H);
-	}
-	else
-		ca->ear_h = EAR_SCALE;
-	ear_cong_avoid_ai(tp, tp->snd_cwnd, acked, ca->ear_h);
+    /* In "safe" area, increase. */
+    if (tcp_in_slow_start(tp)) {
+        acked = tcp_slow_start(tp, acked);
+        if (!acked)
+            return;
+    }
+    /* In dangerous area, increase slowly. */
+    if (ear_h_enable && ca->rtt_ave) {
+        if (ca->rtt_ave < EAR_MIN_H_RTT)
+            ca->ear_h = EAR_MIN_H;
+        else
+            ca->ear_h = (ca->rtt_ave - EAR_MIN_H_RTT)*ear_c/EAR_C_DEFAULT*EAR_H_FACTOR/EAR_SCALE + EAR_MIN_H;
+        ca->ear_h = min(ca->ear_h, EAR_MAX_H);
+        ca->ear_h = max(ca->ear_h, EAR_MIN_H);
+    }
+    else
+        ca->ear_h = EAR_SCALE;
+    ear_cong_avoid_ai(tp, tp->snd_cwnd, acked, ca->ear_h);
 }
 
 static struct tcp_congestion_ops ear __read_mostly = {
-	.init		= ear_init,
-	.in_ack_event   = ear_in_ack_event,
-	.pkts_acked = ear_pkts_acked,
-	.cwnd_event	= ear_cwnd_event,
-	.ssthresh	= ear_ssthresh,
-	.cong_avoid	= ear_cong_avoid,
-	.undo_cwnd	= ear_cwnd_undo,
-	.set_state	= ear_state,
-	.get_info	= ear_get_info,
-	.flags		= TCP_CONG_NEEDS_ECN,
-	.owner		= THIS_MODULE,
-	.name		= "ear",
+    .init       = ear_init,
+    .in_ack_event   = ear_in_ack_event,
+    .pkts_acked = ear_pkts_acked,
+    .cwnd_event = ear_cwnd_event,
+    .ssthresh   = ear_ssthresh,
+    .cong_avoid = ear_cong_avoid,
+    .undo_cwnd  = ear_cwnd_undo,
+    .set_state  = ear_state,
+    .get_info   = ear_get_info,
+    .flags      = TCP_CONG_NEEDS_ECN,
+    .owner      = THIS_MODULE,
+    .name       = "ear",
 };
 
 static struct tcp_congestion_ops ear_reno __read_mostly = {
-	.ssthresh	= tcp_reno_ssthresh,
-	.cong_avoid	= tcp_reno_cong_avoid,
-	.get_info	= ear_get_info,
-	.owner		= THIS_MODULE,
-	.name		= "ear-reno",
+    .ssthresh   = tcp_reno_ssthresh,
+    .cong_avoid = tcp_reno_cong_avoid,
+    .get_info   = ear_get_info,
+    .owner      = THIS_MODULE,
+    .name       = "ear-reno",
 };
 
 static int __init ear_register(void)
 {
-	BUILD_BUG_ON(sizeof(struct ear) > ICSK_CA_PRIV_SIZE);
-	return tcp_register_congestion_control(&ear);
+    BUILD_BUG_ON(sizeof(struct ear) > ICSK_CA_PRIV_SIZE);
+    return tcp_register_congestion_control(&ear);
 }
 
 static void __exit ear_unregister(void)
 {
-	tcp_unregister_congestion_control(&ear);
+    tcp_unregister_congestion_control(&ear);
 }
 
 module_init(ear_register);
