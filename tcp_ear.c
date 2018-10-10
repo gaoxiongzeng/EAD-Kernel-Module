@@ -1,8 +1,4 @@
-/* TCP EAR (ECN and RTT) congestion control.
- *
- * More information...
- *
- */
+/* TCP EAR (ECN and RTT) congestion control. */
 
 #include <linux/module.h>
 #include <linux/mm.h>
@@ -19,6 +15,7 @@
 #define EAR_H_FACTOR 120U // scaled by EAR_SCALE
 #define EAR_MIN_H 100U // scaled by EAR_SCALE
 #define EAR_MAX_H 5000U // scaled by EAR_SCALE
+#define EAR_BASE_RTT_UPDATE 10U
 
 struct ear {
 	u32 acked_bytes_ecn;
@@ -37,6 +34,7 @@ struct ear {
 	u32 ce_state;
 	u32 delayed_ack_reserved;
 	u32 loss_cwnd;
+    u32 cwnd_update_count;
 	u8 prior_ca_state;
 };
 
@@ -118,6 +116,7 @@ static void ear_init(struct sock *sk)
 
 		ca->delayed_ack_reserved = 0;
 		ca->loss_cwnd = 0;
+        ca->cwnd_update_count = 0;
 		ca->ce_state = 0;
 		ca->prior_ca_state = 0;
 		ca->rtt_base = 0x7fffffff;
@@ -164,6 +163,7 @@ static u32 ear_ssthresh(struct sock *sk)
 	u32 cwnd_rtt = 0x7fffffff;
 
 	ca->loss_cwnd = tp->snd_cwnd;
+    ca->cwnd_update_count++;
 
 	cwnd_ecn = ear_cwnd_ecn(sk);
 
@@ -304,6 +304,12 @@ static void ear_in_ack_event(struct sock *sk, u32 flags)
 			tp->snd_cwnd = cwnd_temp;
 			tp->snd_ssthresh = tp->snd_cwnd-1;
 		}
+
+        ca->cwnd_update_count++;
+        if (ca->cwnd_update_count > EAR_BASE_RTT_UPDATE && ca->rtt_min) {
+            ca->rtt_base = ca->rtt_min;
+            ca->cwnd_update_count = 0;
+        }
 
 		ear_reset(tp, ca);
 	}
